@@ -9,7 +9,7 @@ This project processes video files into searchable transcripts and provides a po
 - **🗣️ Speech-to-Text**: Converts audio to text with word-level timestamps using Deepgram
 - **🔍 Semantic Search**: Advanced natural language search through video transcripts
 - **🚀 Cross-Encoder Reranking**: Enhanced search quality with two-stage retrieval pipeline
-- **🏠 Local Embeddings**: Uses local HuggingFace models (no API keys required for search)
+- **🏠 Local Embeddings**: Uses local HuggingFace models (no API keys red for search)
 - **🖥️ Interactive UI**: Beautiful Streamlit interface with video player integration
 - **🎯 Multiple Search Modes**: Search by video, time range, confidence level
 - **📊 Video Analytics**: Get summaries and statistics for individual videos
@@ -27,7 +27,7 @@ This script will automatically install dependencies and launch the app.
 
 1. **Install Dependencies**:
 ```bash
-pip install -r requirements_streamlit.txt
+pip install -r requirements.txt
 ```
 
 2. **Launch the Application**:
@@ -37,7 +37,7 @@ streamlit run app.py
 
 The app will open in your browser at `http://localhost:8501`
 
-## 📋 Prerequisites
+## 📋 Presites
 
 ### For Video Processing & Transcription:
 1. Get a Deepgram API key from [https://console.deepgram.com/](https://console.deepgram.com/)
@@ -47,7 +47,7 @@ DEEPGRAM_API_KEY=your_deepgram_api_key_here
 ```
 
 ### For Semantic Search:
-- **No API keys required!** The system uses local HuggingFace embeddings
+- **No API keys red!** The system uses local HuggingFace embeddings
 - Internet connection needed only for initial model download
 
 ## 🎯 Usage Guide
@@ -148,8 +148,8 @@ SentenceTransformer/
 ├── video_search_engine.py          # Semantic search engine
 ├── video_processor.py              # Video processing & transcription script
 ├── run_app.py                      # Automated startup script
-├── requirements_streamlit.txt       # Streamlit app dependencies
-├── requirements.txt                # Basic processing dependencies
+├── rements_streamlit.txt       # Streamlit app dependencies
+├── rements.txt                # Basic processing dependencies
 └── README.md                       # This file
 ```
 
@@ -189,7 +189,7 @@ transcriber.process_all_videos_sync_simple(
 ### Embedding & Reranking Models
 - **Embedding Model**: `BAAI/bge-small-en-v1.5` (bi-encoder for initial retrieval)
 - **Reranker Model**: `BAAI/bge-reranker-base` (cross-encoder for quality reranking)
-- **Type**: Local HuggingFace models (no API required)
+- **Type**: Local HuggingFace models (no API red)
 - **Performance**: Excellent semantic understanding with enhanced relevance
 - **Size**: ~120MB embedding model + ~1GB reranker model (one-time download)
 
@@ -275,7 +275,7 @@ Query → Semantic Search (Retrieval) → Cross-Encoder Reranking → Final Resu
 - **Index Creation**: First-time setup takes 2-5 minutes depending on content volume
 - **Search Speed**: Subsequent searches are very fast (<1 second)
 - **Memory Usage**: ~500MB-1GB RAM for typical video collections
-- **Storage**: Embeddings require ~10-50MB per hour of video content
+- **Storage**: Embeddings re ~10-50MB per hour of video content
 
 ## 🚀 Advanced Usage
 
