@@ -8,8 +8,15 @@ from typing import List, Dict, Any
 import pandas as pd
 
 # Import our custom modules
-from video_index_manager import VideoIndexManager
-from video_search_engine import VideoSearchEngine
+try:
+    from video_index_manager import VideoIndexManager
+    from video_search_engine import VideoSearchEngine
+    INDEX_AVAILABLE = True
+except ImportError as e:
+    INDEX_AVAILABLE = False
+    st.error(f"⚠️ Search functionality unavailable: {e}")
+    st.info("💡 The app will run in upload-only mode. Please check your dependencies.")
+
 from video_manager import VideoManager
 from video_processor import DeepgramTranscriber
 
@@ -119,6 +126,11 @@ def initialize_upload_system():
 
 def initialize_system():
     """Initialize the video search system"""
+    if not INDEX_AVAILABLE:
+        st.warning("⚠️ Search functionality is not available due to missing dependencies")
+        st.info("💡 You can still upload and process videos, but search features will be disabled")
+        return False
+        
     try:
         with st.spinner("🔄 Initializing semantic search system..."):
             # Initialize index manager
@@ -137,6 +149,7 @@ def initialize_system():
     except Exception as e:
         st.error(f"❌ Failed to initialize system: {e}")
         logger.error(f"Initialization error: {e}")
+        st.info("💡 You can still upload and process videos, but search features will be disabled")
         return False
 
 def handle_video_upload(uploaded_file, custom_title=None):
@@ -247,7 +260,7 @@ def process_uploaded_video(video_id):
                 )
                 
                 # Refresh index to include new video
-                if st.session_state.index_loaded:
+                if INDEX_AVAILABLE and st.session_state.index_loaded:
                     st.write("🔄 Rebuilding search index to include uploaded video...")
                     
                     try:
@@ -275,6 +288,8 @@ def process_uploaded_video(video_id):
                             logger.error(f"Index rebuild error: {index_error}")
                             # Don't fail completely - video transcript is still saved
                             st.warning("⚠️ Search index update failed, but transcript was saved. You may need to restart the app to search this video.")
+                elif not INDEX_AVAILABLE:
+                    st.info("ℹ️ Video processed successfully! Search functionality is not available in this deployment, but transcripts are saved for future use.")
                 
                 st.success(f"✅ Successfully processed {video_info['title']}")
                 return True
@@ -406,12 +421,16 @@ def main():
         st.header("🔧 Controls")
         
         # System initialization
-        if not st.session_state.index_loaded:
-            st.markdown("### Initialize System")
-            if st.button("🚀 Load Search Index", type="primary"):
-                initialize_system()
+        if INDEX_AVAILABLE:
+            if not st.session_state.index_loaded:
+                st.markdown("### Initialize System")
+                if st.button("🚀 Load Search Index", type="primary"):
+                    initialize_system()
+            else:
+                st.success("✅ System Ready")
         else:
-            st.success("✅ System Ready")
+            st.warning("⚠️ Search Disabled")
+            st.caption("Missing dependencies for semantic search")
         
         # Video Upload Section
         st.markdown("### 📤 Upload Videos")
@@ -534,7 +553,17 @@ def main():
                 st.rerun()
     
     # Main content area
-    if not st.session_state.index_loaded:
+    if not INDEX_AVAILABLE:
+        st.warning("⚠️ Search functionality is not available due to missing dependencies")
+        st.info("📤 You can still use the upload functionality in the sidebar to process videos")
+        
+        # Show simplified environment info
+        st.markdown("### 📋 System Status")
+        st.error("❌ Semantic Search: Unavailable (missing LlamaIndex dependencies)")
+        st.success("✅ Video Upload: Available")
+        st.success("✅ Transcript Generation: Available (requires Deepgram API key)")
+        
+    elif not st.session_state.index_loaded:
         st.info("👆 Please initialize the system using the sidebar to start searching")
         
         # Show system requirements
@@ -655,7 +684,7 @@ def main():
             else:
                 st.error("❌ Transcripts folder not found")
     
-    else:
+    elif INDEX_AVAILABLE:
         # Display index statistics
         st.markdown("### 📊 Index Statistics")
         display_index_stats()
@@ -710,110 +739,111 @@ def main():
             except Exception as e:
                 st.warning(f"Could not load video library: {e}")
         
-        # Search interface
-        st.markdown("### 🔍 Search Interface")
-        
-        # Search input
-        query = st.text_input(
-            "Enter your search query:",
-            placeholder="e.g., 'machine learning algorithms', 'data preprocessing', 'neural networks'...",
-            help="Use natural language to search through video content"
-        )
-        
-        # Search buttons
-        col1, col2, col3 = st.columns([2, 2, 6])
-        
-        with col1:
-            search_clicked = st.button("🔍 Search", type="primary")
-        
-        with col2:
-            example_clicked = st.button("💡 Try Example")
-        
-        # Handle example query
-        if example_clicked:
-            query = "machine learning"
-            search_clicked = True
-        
-        # Execute search
-        if search_clicked and query and st.session_state.search_engine:
-            with st.spinner("🔍 Searching..."):
-                try:
-                    # Create new search engine with current reranker setting if needed
-                    if st.session_state.search_engine.use_reranker != use_reranker:
-                        index = st.session_state.index_manager.get_or_create_index()
-                        st.session_state.search_engine = VideoSearchEngine(index, use_reranker=use_reranker)
-                    
-                    # Apply filters
-                    if 'selected_videos' in locals() and selected_videos:
-                        results = st.session_state.search_engine.search_by_video(
-                            query, selected_videos, top_k
-                        )
-                    elif min_confidence > 0:
-                        results = st.session_state.search_engine.search_high_confidence(
-                            query, min_confidence, top_k
-                        )
-                    else:
-                        results = st.session_state.search_engine.semantic_search(
-                            query, top_k, similarity_threshold
-                        )
-                    
-                    st.session_state.search_results = results
-                    
-                except Exception as e:
-                    st.error(f"Search error: {e}")
-                    logger.error(f"Search error: {e}")
-        
-        # Display search results
-        if st.session_state.search_results:
-            st.markdown(f"### 🎯 Search Results ({len(st.session_state.search_results)} found)")
+        # Search interface (only if search is available)
+        if INDEX_AVAILABLE:
+            st.markdown("### 🔍 Search Interface")
             
-            for i, result in enumerate(st.session_state.search_results):
-                display_search_result(result, i)
-                
-                if i < len(st.session_state.search_results) - 1:
-                    st.divider()
-        
-        elif query and search_clicked:
-            st.info("🔍 No results found. Try adjusting your search query or filters.")
-        
-        # Video summary section
-        st.markdown("### 📈 Video Analytics")
-        
-        if st.session_state.search_engine:
-            stats = st.session_state.index_manager.get_index_stats()
+            # Search input
+            query = st.text_input(
+                "Enter your search query:",
+                placeholder="e.g., 'machine learning algorithms', 'data preprocessing', 'neural networks'...",
+                help="Use natural language to search through video content"
+            )
             
-            if "video_files" in stats and stats["video_files"]:
-                selected_video = st.selectbox(
-                    "Get Video Summary:",
-                    options=[""] + stats["video_files"],
-                    format_func=lambda x: "Select a video..." if x == "" else x
-                )
-                
-                if selected_video:
-                    with st.spinner("📊 Generating summary..."):
-                        summary = st.session_state.search_engine.get_video_summary(selected_video)
+            # Search buttons
+            col1, col2, col3 = st.columns([2, 2, 6])
+            
+            with col1:
+                search_clicked = st.button("🔍 Search", type="primary")
+            
+            with col2:
+                example_clicked = st.button("💡 Try Example")
+            
+            # Handle example query
+            if example_clicked:
+                query = "machine learning"
+                search_clicked = True
+            
+            # Execute search
+            if search_clicked and query and st.session_state.search_engine:
+                with st.spinner("🔍 Searching..."):
+                    try:
+                        # Create new search engine with current reranker setting if needed
+                        if st.session_state.search_engine.use_reranker != use_reranker:
+                            index = st.session_state.index_manager.get_or_create_index()
+                            st.session_state.search_engine = VideoSearchEngine(index, use_reranker=use_reranker)
                         
-                        if "error" not in summary:
-                            col1, col2, col3, col4 = st.columns(4)
-                            
-                            with col1:
-                                st.metric("Chunks", summary["total_chunks"])
-                            with col2:
-                                st.metric("Duration", f"{summary['total_duration']/60:.1f} min")
-                            with col3:
-                                st.metric("Words", summary["total_words"])
-                            with col4:
-                                st.metric("Avg Confidence", f"{summary['average_confidence']:.2f}")
-                            
-                            # Full transcript
-                            if st.checkbox("Show Full Transcript"):
-                                st.text_area(
-                                    "Full Transcript:",
-                                    summary["full_transcript"],
-                                    height=300
-                                )
+                        # Apply filters
+                        if 'selected_videos' in locals() and selected_videos:
+                            results = st.session_state.search_engine.search_by_video(
+                                query, selected_videos, top_k
+                            )
+                        elif min_confidence > 0:
+                            results = st.session_state.search_engine.search_high_confidence(
+                                query, min_confidence, top_k
+                            )
                         else:
-                            st.error(f"Error getting summary: {summary['error']}")
+                            results = st.session_state.search_engine.semantic_search(
+                                query, top_k, similarity_threshold
+                            )
+                        
+                        st.session_state.search_results = results
+                        
+                    except Exception as e:
+                        st.error(f"Search error: {e}")
+                        logger.error(f"Search error: {e}")
+            
+            # Display search results
+            if st.session_state.search_results:
+                st.markdown(f"### 🎯 Search Results ({len(st.session_state.search_results)} found)")
+                
+                for i, result in enumerate(st.session_state.search_results):
+                    display_search_result(result, i)
+                    
+                    if i < len(st.session_state.search_results) - 1:
+                        st.divider()
+            
+            elif query and search_clicked:
+                st.info("🔍 No results found. Try adjusting your search query or filters.")
+            
+            # Video summary section
+            st.markdown("### 📈 Video Analytics")
+            
+            if st.session_state.search_engine:
+                stats = st.session_state.index_manager.get_index_stats()
+                
+                if "video_files" in stats and stats["video_files"]:
+                    selected_video = st.selectbox(
+                        "Get Video Summary:",
+                        options=[""] + stats["video_files"],
+                        format_func=lambda x: "Select a video..." if x == "" else x
+                    )
+                    
+                    if selected_video:
+                        with st.spinner("📊 Generating summary..."):
+                            summary = st.session_state.search_engine.get_video_summary(selected_video)
+                            
+                            if "error" not in summary:
+                                col1, col2, col3, col4 = st.columns(4)
+                                
+                                with col1:
+                                    st.metric("Chunks", summary["total_chunks"])
+                                with col2:
+                                    st.metric("Duration", f"{summary['total_duration']/60:.1f} min")
+                                with col3:
+                                    st.metric("Words", summary["total_words"])
+                                with col4:
+                                    st.metric("Avg Confidence", f"{summary['average_confidence']:.2f}")
+                                
+                                # Full transcript
+                                if st.checkbox("Show Full Transcript"):
+                                    st.text_area(
+                                        "Full Transcript:",
+                                        summary["full_transcript"],
+                                        height=300
+                                    )
+                            else:
+                                st.error(f"Error getting summary: {summary['error']}")
 
 if __name__ == "__main__":
     main() 

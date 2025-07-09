@@ -3,19 +3,48 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Optional
 import streamlit as st
+import os
 
-from llama_index.core import VectorStoreIndex, Document, StorageContext, load_index_from_storage, Settings
-from llama_index.core.node_parser import SentenceSplitter
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.vector_stores.chroma import ChromaVectorStore
-import chromadb
-
-# Disable LLM globally to prevent OpenAI initialization
-Settings.llm = None
-
-# Set up logging
+# Set up logging first
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+try:
+    from llama_index.core import VectorStoreIndex, Document, StorageContext, load_index_from_storage, Settings
+    from llama_index.core.node_parser import SentenceSplitter
+    from llama_index.vector_stores.chroma import ChromaVectorStore
+    import chromadb
+    
+    # Try HuggingFace embeddings first
+    try:
+        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+        HUGGINGFACE_AVAILABLE = True
+    except ImportError:
+        HUGGINGFACE_AVAILABLE = False
+        logger.warning("HuggingFace embeddings not available")
+    
+    # Fallback to OpenAI embeddings if HuggingFace fails
+    if not HUGGINGFACE_AVAILABLE:
+        try:
+            from llama_index.embeddings.openai import OpenAIEmbedding
+            OPENAI_AVAILABLE = True
+        except ImportError:
+            OPENAI_AVAILABLE = False
+            logger.warning("OpenAI embeddings not available")
+    else:
+        OPENAI_AVAILABLE = False
+    
+    # Disable LLM globally to prevent unwanted API calls
+    Settings.llm = None
+    LLAMAINDEX_AVAILABLE = True
+    logger.info("✅ LlamaIndex dependencies loaded successfully")
+    
+except ImportError as e:
+    LLAMAINDEX_AVAILABLE = False
+    HUGGINGFACE_AVAILABLE = False
+    OPENAI_AVAILABLE = False
+    logger.error(f"❌ Failed to import LlamaIndex dependencies: {e}")
+    logger.info("💡 The app will run in limited mode without semantic search")
 
 class VideoIndexManager:
     """
@@ -29,17 +58,20 @@ class VideoIndexManager:
         Args:
             embed_model_name: HuggingFace model name for embeddings
         """
+        if not LLAMAINDEX_AVAILABLE:
+            raise ImportError("LlamaIndex dependencies not available. Please check requirements.txt")
+        
         self.embed_model_name = embed_model_name
         self.embed_model = None
         self.index = None
         self.storage_path = "./embeddings/video_index"
         self.chroma_path = "./embeddings/chroma_db"
         
-        # Initialize embedding model
-        self._initialize_embedding_model()
-        
         # Initialize directory permissions early
         self._initialize_directories()
+        
+        # Initialize embedding model
+        self._initialize_embedding_model()
     
     def _initialize_directories(self):
         """Initialize directories with proper permissions"""
@@ -62,17 +94,51 @@ class VideoIndexManager:
             logger.warning(f"Could not initialize directories: {e}")
     
     def _initialize_embedding_model(self):
-        """Initialize the local embedding model"""
-        try:
-            logger.info(f"Loading embedding model: {self.embed_model_name}")
-            self.embed_model = HuggingFaceEmbedding(
-                model_name=self.embed_model_name,
-                device="cpu"  # Use CPU for compatibility
-            )
-            logger.info("✅ Embedding model loaded successfully")
-        except Exception as e:
-            logger.error(f"Failed to load embedding model: {e}")
-            raise
+        """Initialize the embedding model with fallback options"""
+        # Try HuggingFace first (if available)
+        if HUGGINGFACE_AVAILABLE:
+            try:
+                logger.info(f"Loading HuggingFace embedding model: {self.embed_model_name}")
+                self.embed_model = HuggingFaceEmbedding(
+                    model_name=self.embed_model_name,
+                    device="cpu"  # Use CPU for compatibility
+                )
+                logger.info("✅ HuggingFace embedding model loaded successfully")
+                return
+            except Exception as e:
+                logger.warning(f"Failed to load HuggingFace model: {e}")
+        
+        # Fallback to OpenAI embeddings if HuggingFace fails
+        if OPENAI_AVAILABLE:
+            try:
+                # Check for OpenAI API key
+                openai_key = None
+                try:
+                    # Try Streamlit secrets first
+                    openai_key = st.secrets.get("openai", {}).get("OPENAI_API_KEY")
+                except:
+                    pass
+                
+                # Fallback to environment variable
+                if not openai_key:
+                    openai_key = os.getenv("OPENAI_API_KEY")
+                
+                if openai_key:
+                    logger.info("Loading OpenAI embedding model as fallback")
+                    self.embed_model = OpenAIEmbedding(api_key=openai_key)
+                    logger.info("✅ OpenAI embedding model loaded successfully")
+                    return
+                else:
+                    logger.warning("OpenAI API key not found")
+            except Exception as e:
+                logger.warning(f"Failed to load OpenAI model: {e}")
+        
+        # If both fail, raise an error
+        raise ImportError(
+            "No embedding model could be initialized. Please ensure you have either:\n"
+            "1. HuggingFace dependencies installed (sentence-transformers, torch)\n"
+            "2. OpenAI API key configured in secrets or environment variables"
+        )
     
     def load_transcript_documents(self, transcript_folder: str = "transcripts") -> List[Document]:
         """
