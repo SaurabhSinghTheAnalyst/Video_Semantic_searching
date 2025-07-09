@@ -4,6 +4,4 @@ nvenv
 .env
 rag_evaluation_results.json
 Data/*.mp4
-audio/*
-transcripts/*
 embeddings
