@@ -95,8 +95,19 @@ def initialize_upload_system():
                 st.session_state.video_manager = VideoManager()
                 
                 # Initialize video processor (requires Deepgram API key)
-                # Note: User will need to set DEEPGRAM_API_KEY environment variable
-                st.session_state.video_processor = DeepgramTranscriber()
+                # Get API key from Streamlit secrets or environment variable
+                deepgram_key = None
+                try:
+                    # Try Streamlit secrets first (for Streamlit Cloud)
+                    deepgram_key = st.secrets.get("deepgram", {}).get("DEEPGRAM_API_KEY")
+                except:
+                    pass
+                
+                # Fallback to environment variable (for local development) 
+                if not deepgram_key:
+                    deepgram_key = os.getenv("DEEPGRAM_API_KEY")
+                
+                st.session_state.video_processor = DeepgramTranscriber(deepgram_api_key=deepgram_key)
                 st.session_state.upload_initialized = True
                 
             st.success("✅ Upload system initialized!")
@@ -593,7 +604,19 @@ def main():
         
         with col2:
             st.markdown("**Environment Variables:**")
-            deepgram_key = os.getenv("DEEPGRAM_API_KEY")
+            
+            # Check for Deepgram API key (Streamlit Cloud secrets or environment variable)
+            deepgram_key = None
+            try:
+                # Try Streamlit secrets first (for Streamlit Cloud)
+                deepgram_key = st.secrets.get("deepgram", {}).get("DEEPGRAM_API_KEY")
+            except:
+                pass
+            
+            # Fallback to environment variable (for local development)
+            if not deepgram_key:
+                deepgram_key = os.getenv("DEEPGRAM_API_KEY")
+            
             if deepgram_key:
                 st.write("✅ DEEPGRAM_API_KEY (set)")
             else:
