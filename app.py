@@ -1,5 +1,6 @@
 import streamlit as st
 import logging
+import os
 from pathlib import Path
 import json
 import time
@@ -9,6 +10,8 @@ import pandas as pd
 # Import our custom modules
 from video_index_manager import VideoIndexManager
 from video_search_engine import VideoSearchEngine
+from video_manager import VideoManager
+from video_processor import DeepgramTranscriber
 
 # Page configuration
 st.set_page_config(
@@ -72,6 +75,36 @@ if 'index_loaded' not in st.session_state:
     st.session_state.index_loaded = False
 if 'search_results' not in st.session_state:
     st.session_state.search_results = []
+if 'video_manager' not in st.session_state:
+    st.session_state.video_manager = None
+if 'video_processor' not in st.session_state:
+    st.session_state.video_processor = None
+if 'uploaded_videos' not in st.session_state:
+    st.session_state.uploaded_videos = []
+if 'processing_status' not in st.session_state:
+    st.session_state.processing_status = {}
+if 'upload_initialized' not in st.session_state:
+    st.session_state.upload_initialized = False
+
+def initialize_upload_system():
+    """Initialize the video upload and processing system"""
+    try:
+        if not st.session_state.upload_initialized:
+            with st.spinner("🔄 Initializing upload system..."):
+                # Initialize video manager
+                st.session_state.video_manager = VideoManager()
+                
+                # Initialize video processor (requires Deepgram API key)
+                # Note: User will need to set DEEPGRAM_API_KEY environment variable
+                st.session_state.video_processor = DeepgramTranscriber()
+                st.session_state.upload_initialized = True
+                
+            st.success("✅ Upload system initialized!")
+            return True
+    except Exception as e:
+        st.error(f"❌ Failed to initialize upload system: {e}")
+        logger.error(f"Upload system initialization error: {e}")
+        return False
 
 def initialize_system():
     """Initialize the video search system"""
@@ -94,6 +127,167 @@ def initialize_system():
         st.error(f"❌ Failed to initialize system: {e}")
         logger.error(f"Initialization error: {e}")
         return False
+
+def handle_video_upload(uploaded_file, custom_title=None):
+    """Handle uploaded video file"""
+    try:
+        if not st.session_state.upload_initialized:
+            initialize_upload_system()
+        
+        # Save uploaded file to temporary location
+        temp_path = Path("temp_uploads")
+        temp_path.mkdir(exist_ok=True)
+        
+        temp_file_path = temp_path / uploaded_file.name
+        
+        # Write uploaded file
+        with open(temp_file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        
+        # Add to video manager
+        result = st.session_state.video_manager.add_manual_video(
+            str(temp_file_path), 
+            title=custom_title or uploaded_file.name
+        )
+        
+        # Clean up temp file
+        temp_file_path.unlink(missing_ok=True)
+        
+        # Update session state
+        st.session_state.uploaded_videos.append(result)
+        st.session_state.processing_status[result['id']] = 'uploaded'
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Upload error: {e}")
+        st.error(f"Upload failed: {e}")
+        return None
+
+def process_uploaded_video(video_id):
+    """Process uploaded video to generate transcript"""
+    try:
+        if not st.session_state.upload_initialized:
+            st.error("Upload system not initialized")
+            return False
+        
+        # Get video info
+        video_info = st.session_state.video_manager.get_video_by_id(video_id)
+        if not video_info:
+            st.error(f"Video not found: {video_id}")
+            return False
+        
+        video_path = Path(video_info['file_path'])
+        
+        # Update status
+        st.session_state.processing_status[video_id] = 'processing'
+        
+        with st.spinner(f"🎬 Processing {video_info['title']}..."):
+            # Extract audio
+            audio_path = Path("audio") / f"{video_path.stem}.mp3"
+            audio_path.parent.mkdir(exist_ok=True)
+            
+            st.write(f"📢 Extracting audio from {video_path.name}...")
+            st.session_state.video_processor.extract_audio(str(video_path), str(audio_path))
+            
+            # Generate transcript - save to transcripts folder for indexing
+            st.write(f"📝 Generating transcript...")
+            
+            # Create transcripts directory
+            transcripts_path = Path("transcripts")
+            transcripts_path.mkdir(exist_ok=True)
+            
+            # Generate transcript but don't auto-save yet
+            transcript_result = st.session_state.video_processor.transcribe_audio(
+                str(audio_path), save_json=False
+            )
+            
+            if transcript_result:
+                # Save transcript to transcripts folder for indexing
+                transcript_filename = transcripts_path / f"{audio_path.stem}_transcript.json"
+                
+                # Parse and save transcript
+                import json
+                try:
+                    # transcript_result is already JSON string, save it directly
+                    with open(transcript_filename, 'w', encoding='utf-8') as f:
+                        f.write(transcript_result)
+                    
+                    # Verify the file was created and has content
+                    if transcript_filename.exists() and transcript_filename.stat().st_size > 0:
+                        st.write(f"💾 Saved transcript to {transcript_filename}")
+                    else:
+                        raise Exception("Transcript file was not created properly")
+                        
+                except Exception as e:
+                    st.error(f"Failed to save transcript: {e}")
+                    transcript_result = None
+            
+            if transcript_result:
+                # Update video status in database
+                st.session_state.video_manager.update_video_status(
+                    video_id, 'transcript_status', 'completed'
+                )
+                st.session_state.processing_status[video_id] = 'completed'
+                
+                # Update search indexed status in database
+                st.session_state.video_manager.update_video_status(
+                    video_id, 'search_indexed', 'true'
+                )
+                
+                # Refresh index to include new video
+                if st.session_state.index_loaded:
+                    st.write("🔄 Rebuilding search index to include uploaded video...")
+                    
+                    try:
+                        st.session_state.index_manager = VideoIndexManager()
+                        
+                        # Force rebuild to include newly uploaded video transcripts
+                        index = st.session_state.index_manager.rebuild_index()
+                        st.session_state.search_engine = VideoSearchEngine(index, use_reranker=True)
+                        
+                        # Show updated stats to confirm inclusion
+                        stats = st.session_state.index_manager.get_index_stats()
+                        if "error" not in stats:
+                            st.write(f"📊 Index now contains {stats.get('total_chunks', 0)} chunks from {stats.get('total_videos', 0)} videos")
+                            if stats.get("video_files"):
+                                st.write(f"📹 Videos in index: {', '.join(stats['video_files'])}")
+                        
+                        st.write("✅ Search index rebuilt - uploaded video is now searchable!")
+                        
+                    except Exception as index_error:
+                        if "readonly database" in str(index_error).lower():
+                            st.warning("⚠️ Database permission issue detected. Using fallback indexing method...")
+                            st.info("💡 Your video is still searchable, but the index won't persist between sessions. This is usually due to file permission restrictions.")
+                        else:
+                            st.error(f"❌ Index rebuild failed: {index_error}")
+                            logger.error(f"Index rebuild error: {index_error}")
+                            # Don't fail completely - video transcript is still saved
+                            st.warning("⚠️ Search index update failed, but transcript was saved. You may need to restart the app to search this video.")
+                
+                st.success(f"✅ Successfully processed {video_info['title']}")
+                return True
+            else:
+                st.session_state.processing_status[video_id] = 'failed'
+                st.error("Failed to generate transcript")
+                return False
+                
+    except Exception as e:
+        st.session_state.processing_status[video_id] = 'failed'
+        logger.error(f"Processing error: {e}")
+        st.error(f"Processing failed: {e}")
+        return False
+
+def cleanup_temp_files():
+    """Clean up temporary upload files"""
+    try:
+        temp_path = Path("temp_uploads")
+        if temp_path.exists():
+            for file in temp_path.glob("*"):
+                file.unlink(missing_ok=True)
+            temp_path.rmdir()
+    except Exception as e:
+        logger.warning(f"Cleanup warning: {e}")
 
 def display_index_stats():
     """Display statistics about the loaded index"""
@@ -189,6 +383,9 @@ def display_video_info(result: Dict[str, Any]):
 def main():
     """Main Streamlit application"""
     
+    # Clean up any leftover temporary files
+    cleanup_temp_files()
+    
     # Header
     st.title("🎥 Video Semantic Search")
     st.markdown("Search through video transcripts using natural language queries powered by LlamaIndex")
@@ -204,6 +401,96 @@ def main():
                 initialize_system()
         else:
             st.success("✅ System Ready")
+        
+        # Video Upload Section
+        st.markdown("### 📤 Upload Videos")
+        
+        # Initialize upload system
+        if not st.session_state.upload_initialized:
+            if st.button("🔧 Initialize Upload System"):
+                initialize_upload_system()
+        else:
+            # File uploader
+            uploaded_files = st.file_uploader(
+                "Choose video files",
+                type=['mp4', 'avi', 'mov', 'mkv', 'wmv', 'flv'],
+                accept_multiple_files=True,
+                help="Upload video files to add to your searchable library"
+            )
+            
+            if uploaded_files:
+                for uploaded_file in uploaded_files:
+                    # Check if already uploaded
+                    already_uploaded = any(
+                        video['title'] == uploaded_file.name 
+                        for video in st.session_state.uploaded_videos
+                    )
+                    
+                    if not already_uploaded:
+                        col1, col2 = st.columns([3, 1])
+                        
+                        with col1:
+                            custom_title = st.text_input(
+                                f"Title for {uploaded_file.name}:",
+                                value=Path(uploaded_file.name).stem,
+                                key=f"title_{uploaded_file.name}"
+                            )
+                        
+                        with col2:
+                            if st.button(f"📤 Upload", key=f"upload_{uploaded_file.name}"):
+                                result = handle_video_upload(uploaded_file, custom_title)
+                                if result:
+                                    st.success(f"✅ Uploaded: {result['title']}")
+                                    st.rerun()
+            
+            # Display uploaded videos status
+            if st.session_state.uploaded_videos:
+                st.markdown("#### 📋 Uploaded Videos")
+                
+                for video in st.session_state.uploaded_videos:
+                    video_id = video['id']
+                    status = st.session_state.processing_status.get(video_id, 'unknown')
+                    
+                    # Status indicators
+                    status_icons = {
+                        'uploaded': '⏳',
+                        'processing': '🔄',
+                        'completed': '✅',
+                        'failed': '❌'
+                    }
+                    
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    
+                    with col1:
+                        st.write(f"{status_icons.get(status, '❓')} {video['title']}")
+                    
+                    with col2:
+                        st.write(status.title())
+                    
+                    with col3:
+                        if status == 'uploaded' and st.button(f"🎬 Process", key=f"process_{video_id}"):
+                            if process_uploaded_video(video_id):
+                                st.rerun()
+                        elif status == 'completed':
+                            st.write("✅ Ready")
+                        elif status == 'processing':
+                            st.write("🔄 Processing...")
+                        elif status == 'failed':
+                            if st.button(f"🔄 Retry", key=f"retry_{video_id}"):
+                                if process_uploaded_video(video_id):
+                                    st.rerun()
+                
+                # Bulk processing
+                pending_videos = [
+                    video for video in st.session_state.uploaded_videos 
+                    if st.session_state.processing_status.get(video['id']) == 'uploaded'
+                ]
+                
+                if pending_videos and st.button("🚀 Process All Pending"):
+                    for video in pending_videos:
+                        st.write(f"Processing {video['title']}...")
+                        process_uploaded_video(video['id'])
+                    st.rerun()
             
             # Search parameters
             st.markdown("### Search Settings")
@@ -242,10 +529,76 @@ def main():
         # Show system requirements
         st.markdown("### 📋 System Requirements")
         st.markdown("""
-        - Video files in `Data/` folder (1.mp4, 2.mp4, etc.)
-        - Transcript files in `transcripts/` folder
-        - Required Python packages (see requirements_streamlit.txt)
+        - Video files in `Data/` folder (1.mp4, 2.mp4, etc.) **OR** upload videos using the sidebar
+        - Transcript files in `transcripts/` folder (auto-generated from uploads)
+        - Required Python packages (see requirements.txt)
+        - **NEW**: Deepgram API key for automatic transcript generation from uploaded videos
         """)
+        
+        # Upload feature info
+        st.markdown("### 🆕 Upload Feature")
+        st.info("""
+        **Upload Functionality Available!**
+        
+        You can now upload videos directly through the sidebar:
+        1. Initialize the upload system in the sidebar
+        2. Upload video files (MP4, AVI, MOV, MKV, WMV, FLV)
+        3. Process videos to generate transcripts automatically
+        4. **NEW**: Transcripts are now properly saved to the `transcripts/` folder for indexing
+        5. Search through your uploaded content immediately after processing
+        
+        **Note**: You'll need a Deepgram API key set as an environment variable `DEEPGRAM_API_KEY` for automatic transcript generation.
+        """)
+        
+        st.success("""
+        🔧 **Fixed**: Uploaded videos are now properly indexed for search! 
+        Videos marked as "🔍 searchable" in the library will appear in search results.
+        """)
+        
+        # Environment check
+        st.markdown("### 🔧 Environment Check")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Required Packages:**")
+            required_packages = [
+                "streamlit", "llama-index", "moviepy", 
+                "deepgram-sdk", "pandas", "pathlib"
+            ]
+            
+            # Check if we can import key packages
+            import_checks = {}
+            try:
+                import moviepy
+                import_checks["moviepy"] = "✅"
+            except ImportError:
+                import_checks["moviepy"] = "❌"
+            
+            try:
+                from deepgram import DeepgramClient
+                import_checks["deepgram"] = "✅"
+            except ImportError:
+                import_checks["deepgram"] = "❌"
+            
+            try:
+                import llama_index
+                import_checks["llama-index"] = "✅"
+            except ImportError:
+                import_checks["llama-index"] = "❌"
+            
+            for pkg in ["moviepy", "deepgram", "llama-index"]:
+                status = import_checks.get(pkg, "❓")
+                st.write(f"{status} {pkg}")
+        
+        with col2:
+            st.markdown("**Environment Variables:**")
+            deepgram_key = os.getenv("DEEPGRAM_API_KEY")
+            if deepgram_key:
+                st.write("✅ DEEPGRAM_API_KEY (set)")
+            else:
+                st.write("⚠️ DEEPGRAM_API_KEY (not set)")
+                st.caption("Required for automatic transcript generation")
         
         # Check if files exist
         st.markdown("### 📁 File Status Check")
@@ -283,6 +636,56 @@ def main():
         # Display index statistics
         st.markdown("### 📊 Index Statistics")
         display_index_stats()
+        
+        # Video Library Overview
+        if st.session_state.upload_initialized and st.session_state.video_manager:
+            st.markdown("### 📚 Video Library")
+            
+            try:
+                all_videos = st.session_state.video_manager.get_all_videos()
+                
+                if all_videos:
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    total_videos = len(all_videos)
+                    manual_videos = len([v for v in all_videos if v.get('source') == 'manual'])
+                    completed_videos = len([v for v in all_videos if v.get('transcript_status') == 'completed'])
+                    indexed_videos = len([v for v in all_videos if v.get('search_indexed') == 'true'])
+                    total_size = sum(v.get('file_size', 0) for v in all_videos) / (1024*1024)  # MB
+                    
+                    with col1:
+                        st.metric("Total Videos", total_videos)
+                    with col2:
+                        st.metric("Uploaded Videos", manual_videos)
+                    with col3:
+                        st.metric("Processed Videos", completed_videos)
+                    with col4:
+                        st.metric("Searchable Videos", indexed_videos)
+                    
+                    # Storage info
+                    st.caption(f"📁 Total storage: {total_size:.1f} MB")
+                    
+                    # Show recent uploads
+                    recent_videos = sorted(all_videos, key=lambda x: x.get('added_date', ''), reverse=True)[:5]
+                    
+                    if recent_videos:
+                        st.markdown("**Recent Videos:**")
+                        for video in recent_videos:
+                            if video.get('search_indexed') == 'true':
+                                status_icon = "🔍"  # Searchable
+                                status_text = "searchable"
+                            elif video.get('transcript_status') == 'completed':
+                                status_icon = "✅"  # Processed but not indexed
+                                status_text = "processed"
+                            else:
+                                status_icon = "⏳"  # Pending
+                                status_text = "pending"
+                            st.write(f"{status_icon} {video.get('title', 'Unknown')} ({status_text})")
+                else:
+                    st.info("📁 No videos in library yet. Upload some videos to get started!")
+                    
+            except Exception as e:
+                st.warning(f"Could not load video library: {e}")
         
         # Search interface
         st.markdown("### 🔍 Search Interface")

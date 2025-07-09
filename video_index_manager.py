@@ -37,6 +37,29 @@ class VideoIndexManager:
         
         # Initialize embedding model
         self._initialize_embedding_model()
+        
+        # Initialize directory permissions early
+        self._initialize_directories()
+    
+    def _initialize_directories(self):
+        """Initialize directories with proper permissions"""
+        try:
+            import os
+            
+            # Create directories if they don't exist
+            Path(self.storage_path).mkdir(parents=True, exist_ok=True)
+            Path(self.chroma_path).mkdir(parents=True, exist_ok=True)
+            
+            # Set proper permissions
+            try:
+                os.chmod(self.storage_path, 0o755)
+                os.chmod(self.chroma_path, 0o755)
+            except OSError:
+                # Ignore permission errors on some systems
+                pass
+                
+        except Exception as e:
+            logger.warning(f"Could not initialize directories: {e}")
     
     def _initialize_embedding_model(self):
         """Initialize the local embedding model"""
@@ -289,32 +312,84 @@ class VideoIndexManager:
         if not documents:
             raise ValueError("No valid documents found to create index")
         
-        # Set up Chroma vector store
-        chroma_client = chromadb.PersistentClient(path=self.chroma_path)
-        chroma_collection = chroma_client.get_or_create_collection("video_transcripts")
-        vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-        storage_context = StorageContext.from_defaults(vector_store=vector_store)
-        
-        # Create index with custom node parser
-        node_parser = SentenceSplitter(
-            chunk_size=512,  # Smaller chunks for better precision
-            chunk_overlap=50  # Some overlap to maintain context
-        )
-        
-        # Create the index
-        self.index = VectorStoreIndex.from_documents(
-            documents,
-            storage_context=storage_context,
-            embed_model=self.embed_model,
-            transformations=[node_parser]
-        )
-        
-        # Persist the index
-        Path(self.storage_path).mkdir(parents=True, exist_ok=True)
-        self.index.storage_context.persist(persist_dir=self.storage_path)
-        
-        logger.info(f"✅ Index created and persisted to {self.storage_path}")
-        return self.index
+        try:
+            # Ensure directories exist with proper permissions
+            Path(self.chroma_path).mkdir(parents=True, exist_ok=True)
+            Path(self.storage_path).mkdir(parents=True, exist_ok=True)
+            
+            # Set up Chroma vector store with error handling
+            import os
+            
+            # Try to fix permissions if needed
+            if os.path.exists(self.chroma_path):
+                try:
+                    os.chmod(self.chroma_path, 0o755)
+                except:
+                    pass  # Ignore permission errors on some systems
+            
+            chroma_client = chromadb.PersistentClient(path=self.chroma_path)
+            chroma_collection = chroma_client.get_or_create_collection("video_transcripts")
+            vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+            storage_context = StorageContext.from_defaults(vector_store=vector_store)
+            
+            # Create index with custom node parser
+            node_parser = SentenceSplitter(
+                chunk_size=512,  # Smaller chunks for better precision
+                chunk_overlap=50  # Some overlap to maintain context
+            )
+            
+            # Create the index
+            self.index = VectorStoreIndex.from_documents(
+                documents,
+                storage_context=storage_context,
+                embed_model=self.embed_model,
+                transformations=[node_parser]
+            )
+            
+            # Persist the index
+            self.index.storage_context.persist(persist_dir=self.storage_path)
+            
+            logger.info(f"✅ Index created and persisted to {self.storage_path}")
+            return self.index
+            
+        except Exception as e:
+            if "readonly database" in str(e).lower():
+                logger.error("Database permission error - trying alternative approach...")
+                return self._create_index_alternative_approach(documents, transcript_folder)
+            else:
+                logger.error(f"Error creating index: {e}")
+                raise
+    
+    def _create_index_alternative_approach(self, documents, transcript_folder: str) -> VectorStoreIndex:
+        """
+        Alternative index creation approach when database permissions fail
+        Uses in-memory vector store as fallback
+        """
+        try:
+            logger.info("🔄 Creating in-memory index as fallback...")
+            
+            # Use simple in-memory vector store
+            from llama_index.core import SimpleDirectoryReader
+            
+            # Create index without persistent storage
+            node_parser = SentenceSplitter(
+                chunk_size=512,
+                chunk_overlap=50
+            )
+            
+            # Create in-memory index
+            self.index = VectorStoreIndex.from_documents(
+                documents,
+                embed_model=self.embed_model,
+                transformations=[node_parser]
+            )
+            
+            logger.info("✅ In-memory index created successfully")
+            return self.index
+            
+        except Exception as e:
+            logger.error(f"Failed to create fallback index: {e}")
+            raise
     
     def load_existing_index(self) -> Optional[VectorStoreIndex]:
         """
@@ -370,6 +445,61 @@ class VideoIndexManager:
             self.index = self.create_index_from_transcripts(transcript_folder)
         
         return self.index
+    
+    def rebuild_index(self, transcript_folder: str = "transcripts") -> VectorStoreIndex:
+        """
+        Force rebuild of the index to include all transcripts (including newly uploaded ones)
+        
+        Args:
+            transcript_folder: Path to transcript files
+            
+        Returns:
+            VectorStoreIndex object
+        """
+        logger.info("🔄 Force rebuilding index to include all transcripts...")
+        
+        try:
+            # Delete existing index files with better error handling
+            import shutil
+            import os
+            
+            if Path(self.storage_path).exists():
+                try:
+                    # Try to fix permissions before deletion
+                    for root, dirs, files in os.walk(self.storage_path):
+                        for d in dirs:
+                            os.chmod(os.path.join(root, d), 0o755)
+                        for f in files:
+                            os.chmod(os.path.join(root, f), 0o644)
+                    shutil.rmtree(self.storage_path)
+                    logger.info(f"Deleted existing index at {self.storage_path}")
+                except Exception as e:
+                    logger.warning(f"Could not delete index directory: {e}")
+            
+            if Path(self.chroma_path).exists():
+                try:
+                    # Try to fix permissions before deletion
+                    for root, dirs, files in os.walk(self.chroma_path):
+                        for d in dirs:
+                            os.chmod(os.path.join(root, d), 0o755)
+                        for f in files:
+                            os.chmod(os.path.join(root, f), 0o644)
+                    shutil.rmtree(self.chroma_path)
+                    logger.info(f"Deleted existing Chroma DB at {self.chroma_path}")
+                except Exception as e:
+                    logger.warning(f"Could not delete Chroma directory: {e}")
+            
+            # Create fresh index with all transcripts
+            self.index = self.create_index_from_transcripts(transcript_folder)
+            
+            logger.info("✅ Index rebuilt successfully with all transcripts")
+            return self.index
+            
+        except Exception as e:
+            logger.error(f"Error rebuilding index: {e}")
+            # Try alternative approach if main method fails
+            documents = self.load_transcript_documents(transcript_folder)
+            return self._create_index_alternative_approach(documents, transcript_folder)
     
     def get_index_stats(self) -> Dict:
         """
