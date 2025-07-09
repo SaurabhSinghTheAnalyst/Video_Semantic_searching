@@ -1,14 +1,6 @@
 streamlit>=1.28.0
-llama-index>=0.10.0
-llama-index-embeddings-huggingface>=0.1.0
-llama-index-embeddings-openai>=0.1.0
-llama-index-vector-stores-chroma>=0.1.0
-sentence-transformers>=2.2.2
-torch>=2.0.0,<2.2.0
-transformers>=4.30.0,<4.40.0
-chromadb>=0.4.15,<0.5.0
 pandas>=1.5.0
-numpy>=1.24.0,<2.0.0
+numpy>=1.24.0
 moviepy==1.0.3
-deepgram-sdk>=3.0.0,<4.0.0
+deepgram-sdk>=3.0.0
 python-dotenv>=1.0.0 

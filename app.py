@@ -289,7 +289,8 @@ def process_uploaded_video(video_id):
                             # Don't fail completely - video transcript is still saved
                             st.warning("⚠️ Search index update failed, but transcript was saved. You may need to restart the app to search this video.")
                 elif not INDEX_AVAILABLE:
-                    st.info("ℹ️ Video processed successfully! Search functionality is not available in this deployment, but transcripts are saved for future use.")
+                    st.success("🎉 Video processed successfully!")
+                    st.info("📄 Transcript has been generated and saved. In a full deployment with search dependencies, this video would be automatically indexed for semantic search.")
                 
                 st.success(f"✅ Successfully processed {video_info['title']}")
                 return True
@@ -429,8 +430,21 @@ def main():
             else:
                 st.success("✅ System Ready")
         else:
-            st.warning("⚠️ Search Disabled")
-            st.caption("Missing dependencies for semantic search")
+            st.info("📋 Minimal Deployment")
+            st.caption("Upload and transcription only")
+            
+            with st.expander("ℹ️ About Search Functionality"):
+                st.write("""
+                **Search is disabled in this deployment** to ensure:
+                - Fast startup times
+                - Reliable deployment  
+                - Minimal resource usage
+                
+                **Core features still available:**
+                - Video upload and processing
+                - Automatic transcript generation
+                - Video library management
+                """)
         
         # Video Upload Section
         st.markdown("### 📤 Upload Videos")
@@ -554,14 +568,31 @@ def main():
     
     # Main content area
     if not INDEX_AVAILABLE:
-        st.warning("⚠️ Search functionality is not available due to missing dependencies")
-        st.info("📤 You can still use the upload functionality in the sidebar to process videos")
+        st.info("🚀 **Minimal Deployment Mode** - This is a lightweight version focused on video upload and transcription")
+        st.success("📤 You can upload videos and generate transcripts using the sidebar")
         
         # Show simplified environment info
         st.markdown("### 📋 System Status")
-        st.error("❌ Semantic Search: Unavailable (missing LlamaIndex dependencies)")
+        st.error("❌ Semantic Search: Unavailable (minimal deployment)")
         st.success("✅ Video Upload: Available")
         st.success("✅ Transcript Generation: Available (requires Deepgram API key)")
+        
+        # Deployment info
+        st.markdown("### 🔧 About This Deployment")
+        st.info("""
+        **This is a minimal deployment** that includes core functionality:
+        - ✅ Video file upload (MP4, AVI, MOV, MKV, WMV, FLV)
+        - ✅ Automatic transcript generation using Deepgram API
+        - ✅ Video library management
+        - ✅ File organization and metadata tracking
+        
+        **Search functionality is disabled** to ensure fast deployment and reliability.
+        To enable search features, you would need to add ML dependencies like:
+        - llama-index
+        - sentence-transformers
+        - torch
+        - chromadb
+        """)
         
     elif not st.session_state.index_loaded:
         st.info("👆 Please initialize the system using the sidebar to start searching")
@@ -688,10 +719,10 @@ def main():
         # Display index statistics
         st.markdown("### 📊 Index Statistics")
         display_index_stats()
-        
-        # Video Library Overview
-        if st.session_state.upload_initialized and st.session_state.video_manager:
-            st.markdown("### 📚 Video Library")
+    
+    # Video Library Overview (works in both modes)
+    if st.session_state.upload_initialized and st.session_state.video_manager:
+        st.markdown("### 📚 Video Library")
             
             try:
                 all_videos = st.session_state.video_manager.get_all_videos()
