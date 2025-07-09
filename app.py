@@ -724,7 +724,7 @@ def main():
     if st.session_state.upload_initialized and st.session_state.video_manager:
         st.markdown("### 📚 Video Library")
             
-            try:
+        try:
                 all_videos = st.session_state.video_manager.get_all_videos()
                 
                 if all_videos:
@@ -767,7 +767,7 @@ def main():
                 else:
                     st.info("📁 No videos in library yet. Upload some videos to get started!")
                     
-            except Exception as e:
+        except Exception as e:
                 st.warning(f"Could not load video library: {e}")
         
         # Search interface (only if search is available)
